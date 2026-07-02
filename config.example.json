@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "port": 47001,
+  "response_port": null,
+  "shutdown_enabled": false,
+  "status_interval_seconds": 5,
+  "aes_key_protected": "<created-by-installer.py>",
+  "command_codes": {
+    "shutdown": "1001",
+    "status": "1002"
+  },
+  "response_codes": {
+    "online": "2001",
+    "shutdown_accepted": "2002",
+    "unknown_command": "4001",
+    "command_failed": "5001"
+  }
+}
