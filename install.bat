@@ -1,16 +1,18 @@
 @echo off
+chcp 65001 >nul
 setlocal
-cd /d "%~dp0"
+pushd "%~dp0" >nul 2>&1
+if errorlevel 1 goto failed
 
-set SERVICE_NAME=PcPowerAgent
-set RULE_NAME=PC Power Agent UDP
-set INSTALLER_EXE=installer.exe
-set SERVICE_EXE=pc_agent_service.exe
-set PYTHON_INSTALLER=installer.py
-set PYTHON_SERVICE=pc_agent_service.py
+set "SERVICE_NAME=PcPowerAgent"
+set "RULE_NAME=PC Power Agent UDP"
+set "INSTALLER_EXE=installer.exe"
+set "SERVICE_EXE=pc_agent_service.exe"
+set "PYTHON_INSTALLER=installer.py"
+set "PYTHON_SERVICE=pc_agent_service.py"
 
 if not exist config.json (
-  echo config.json not found.
+  call :print_utf8 "7ISk7KCV7YyM7J287J20IOyXhuyKteuLiOuLpC4="
   echo.
   if exist "%INSTALLER_EXE%" (
     "%INSTALLER_EXE%" --manual --enable-shutdown
@@ -18,9 +20,12 @@ if not exist config.json (
     python "%PYTHON_INSTALLER%" --manual --enable-shutdown
   )
   if errorlevel 1 goto failed
+) else (
+  call :print_utf8 "6riw7KG0IOyEpOyglSDtjIzsnbzsnbQg7KG07J6sIO2VqeuLiOuLpC4g7J6s7ISk7KCV7IucIGNvbmZpZyDtjIzsnbzsnYQg7IiY7KCV7ZW07KO87IS47JqULg=="
+  echo.
 )
 
-for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content -Raw -Encoding UTF8 'config.json' | ConvertFrom-Json).port"`) do set AGENT_PORT=%%p
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content -Raw -Encoding UTF8 'config.json' | ConvertFrom-Json).port"`) do set "AGENT_PORT=%%p"
 
 if "%AGENT_PORT%"=="" (
   echo Failed to read UDP port from config.json.
@@ -50,7 +55,12 @@ if exist "%SERVICE_EXE%" (
 echo Installed %SERVICE_NAME% on UDP port %AGENT_PORT%.
 echo.
 pause
+popd
 endlocal
+exit /b 0
+
+:print_utf8
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Host ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%~1')))"
 exit /b 0
 
 :failed
@@ -59,5 +69,6 @@ echo Install failed. Please copy this screen text and send it to Codex.
 echo Current folder: %CD%
 echo.
 pause
+popd >nul 2>&1
 endlocal
 exit /b 1

@@ -58,11 +58,16 @@ def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes
 
 
 def interactive_args() -> tuple[int, bytes, str | None, int | None]:
-    port = parse_pc_port(input("PC number or UDP port (ex: 1, 47001, 8080): "))
+    port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호를 입력해주세요 : "))
     return port, parse_key(FIXED_AES_KEY), FIXED_NOTIFY_HOST, port
 
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description="Configure PC power agent")
     parser.add_argument("--config", type=Path, default=default_config_path())
     parser.add_argument("--manual", action="store_true", help="configure with direct port/key input")
@@ -107,7 +112,7 @@ def main() -> int:
 
     print(f"config saved: {path}")
     print(f"udp port: {port}")
-    print("aes key: fixed")
+    print("aes key : 인증 완료")
     print(f"shutdown enabled: {args.enable_shutdown}")
     print(f"startup notify: {notify_host or 'disabled'}:{notify_port or ''}")
     print(f"status interval seconds: {args.status_interval}")
