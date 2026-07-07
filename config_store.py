@@ -12,6 +12,7 @@ from typing import Any
 
 DEFAULT_CONFIG_FILE = "config.json"
 APP_VERSION = 2
+APP_DISPLAY_VERSION = "1.0.3"
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
 
@@ -121,7 +122,7 @@ def save_config(
     startup_notify_host: str | None = None,
     startup_notify_port: int | None = None,
     startup_notify_retries: int = 3,
-    status_interval_seconds: int = 5,
+    status_interval_seconds: int = 20,
     command_codes: dict[str, str] | None = None,
     response_codes: dict[str, str] | None = None,
 ) -> Path:

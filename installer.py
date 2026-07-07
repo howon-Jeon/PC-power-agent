@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from config_store import APP_VERSION, ConfigError, default_config_path, save_config, validate_port
+from config_store import APP_DISPLAY_VERSION, ConfigError, default_config_path, save_config, validate_port
 
 
 FIXED_AES_KEY = "tCF2fFU8827lb23wEXzbZhB3IMHT09zM"
@@ -57,7 +57,7 @@ def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes
 
 
 def interactive_args() -> tuple[int, bytes, str | None, int | None]:
-    print(f"프로그램 버전: {APP_VERSION}")
+    print(f"프로그램 버전: {APP_DISPLAY_VERSION}")
     port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호를 입력해주세요 : "))
     return port, parse_key(FIXED_AES_KEY), FIXED_NOTIFY_HOST, port
 
@@ -76,7 +76,7 @@ def main() -> int:
     parser.add_argument("--key-base64")
     parser.add_argument("--notify-host", help="controller IP or broadcast address for startup online notification")
     parser.add_argument("--notify-port", type=int, help="controller UDP port for startup online notification")
-    parser.add_argument("--status-interval", type=int, default=5, help="seconds between periodic #PC_STATUS:1& notifications")
+    parser.add_argument("--status-interval", type=int, default=20, help="seconds between periodic #PC_STATUS:1& notifications")
     parser.add_argument("--server-url", help="install-code exchange endpoint")
     parser.add_argument("--install-code", help="6-digit install code")
     parser.add_argument("--enable-shutdown", action="store_true", help="allow real Windows shutdown")

@@ -3,7 +3,7 @@
   "port": 47001,
   "response_port": null,
   "shutdown_enabled": false,
-  "status_interval_seconds": 5,
+  "status_interval_seconds": 20,
   "aes_key_protected": "<created-by-installer.py>",
   "command_codes": {
     "shutdown": "1001",

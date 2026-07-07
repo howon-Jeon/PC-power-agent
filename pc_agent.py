@@ -13,6 +13,7 @@ from typing import Any
 
 from config_store import ConfigError, default_config_path, load_config
 from crypto_codec import PacketCryptoError, decrypt_packet, encrypt_packet
+from network_broadcast import resolve_broadcast_targets
 from protocol import build_framed_response, build_response, parse_command
 
 
@@ -26,6 +27,11 @@ SHUTDOWN_EVENT_ARM_DELAY_SECONDS = 20
 SHUTDOWN_BURST_COUNT = 3
 SHUTDOWN_BURST_INTERVAL_SECONDS = 0.15
 SHUTDOWN_STUCK_RECOVERY_SECONDS = 120
+SHUTDOWN_PUSH_WINDOW_SECONDS = 12
+EVENT_LOG_POLL_INTERVAL_SECONDS = 5
+
+_event_log_next_check_at = 0.0
+_event_log_last_result = False
 
 
 def setup_logging(foreground: bool) -> None:
@@ -67,6 +73,16 @@ def has_recent_windows_shutdown_event() -> bool:
     if sys.platform != "win32":
         return False
 
+    # wevtutil spawns an external process; polling it on every loop
+    # iteration (which can be many times a second while packets are
+    # flowing) starves the loop and delays inbound command handling.
+    # Only re-check every EVENT_LOG_POLL_INTERVAL_SECONDS and reuse the
+    # cached result in between.
+    global _event_log_next_check_at, _event_log_last_result
+    now = time.monotonic()
+    if now < _event_log_next_check_at:
+        return _event_log_last_result
+
     query = f"*[System[(EventID=1074) and TimeCreated[timediff(@SystemTime) <= {SHUTDOWN_EVENT_LOOKBACK_MS}]]]"
     try:
         result = subprocess.run(
@@ -76,10 +92,13 @@ def has_recent_windows_shutdown_event() -> bool:
             timeout=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        found = result.returncode == 0 and bool(result.stdout.strip())
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        found = False
 
-    return result.returncode == 0 and bool(result.stdout.strip())
+    _event_log_last_result = found
+    _event_log_next_check_at = now + EVENT_LOG_POLL_INTERVAL_SECONDS
+    return found
 
 
 def detect_windows_shutdown(use_event_log: bool) -> bool:
@@ -110,16 +129,17 @@ def send_startup_notification(sock: socket.socket, config: dict[str, Any]) -> No
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     for attempt in range(1, retries + 1):
-        try:
-            packet = encrypt_packet(
-                config["aes_key"],
-                build_framed_response("online"),
-                config.get("packet_format", "nonce_ciphertext_tag"),
-            )
-            sock.sendto(packet, (str(notify_host), notify_port))
-            LOGGER.info("sent startup notification attempt=%s to %s:%s", attempt, notify_host, notify_port)
-        except OSError:
-            LOGGER.exception("failed to send startup notification attempt=%s to %s:%s", attempt, notify_host, notify_port)
+        for target in resolve_broadcast_targets(str(notify_host)):
+            try:
+                packet = encrypt_packet(
+                    config["aes_key"],
+                    build_framed_response("online"),
+                    config.get("packet_format", "nonce_ciphertext_tag"),
+                )
+                sock.sendto(packet, (target, notify_port))
+                LOGGER.info("sent startup notification attempt=%s to %s:%s", attempt, target, notify_port)
+            except OSError:
+                LOGGER.exception("failed to send startup notification attempt=%s to %s:%s", attempt, target, notify_port)
         if attempt < retries:
             time.sleep(1)
 
@@ -137,11 +157,12 @@ def send_status(sock: socket.socket, config: dict[str, Any], status: str, reason
         config.get("packet_format", "nonce_ciphertext_tag"),
     )
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    try:
-        sock.sendto(packet, (str(notify_host), notify_port))
-        LOGGER.info("sent status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, notify_host, notify_port)
-    except OSError:
-        LOGGER.exception("failed to send status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, notify_host, notify_port)
+    for target in resolve_broadcast_targets(str(notify_host)):
+        try:
+            sock.sendto(packet, (target, notify_port))
+            LOGGER.info("sent status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, target, notify_port)
+        except OSError:
+            LOGGER.exception("failed to send status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, target, notify_port)
 
 
 def send_status_burst(sock: socket.socket, config: dict[str, Any], status: str, reason: str) -> None:
@@ -254,8 +275,12 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
                 enter_shutdown("windows_shutdown_detected", now)
 
             if status_interval and now >= next_status_at:
-                reason = "periodic_shutdown" if current_status == "shutdown_accepted" else "periodic"
-                send_status(sock, config, current_status, reason)
+                within_push_window = (
+                    shutdown_accepted_at is None or now - shutdown_accepted_at <= SHUTDOWN_PUSH_WINDOW_SECONDS
+                )
+                if current_status != "shutdown_accepted" or within_push_window:
+                    reason = "periodic_shutdown" if current_status == "shutdown_accepted" else "periodic"
+                    send_status(sock, config, current_status, reason)
                 next_status_at = time.monotonic() + status_interval
 
             try:
