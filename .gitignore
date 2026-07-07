@@ -13,6 +13,7 @@ pc_agent.log
 .env
 .venv/
 venv/
+.claude/
 
 .DS_Store
 Thumbs.db

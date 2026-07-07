@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import logging
 import socket
 import subprocess
@@ -17,6 +18,14 @@ from protocol import build_framed_response, build_response, parse_command
 
 LOGGER = logging.getLogger("pc_agent")
 STOP_EVENT = threading.Event()
+WINDOWS_SHUTDOWN_EVENT = threading.Event()
+SM_SHUTTINGDOWN = 0x2000
+SHUTDOWN_STATUS_INTERVAL_SECONDS = 3
+SHUTDOWN_EVENT_LOOKBACK_MS = 15000
+SHUTDOWN_EVENT_ARM_DELAY_SECONDS = 20
+SHUTDOWN_BURST_COUNT = 3
+SHUTDOWN_BURST_INTERVAL_SECONDS = 0.15
+SHUTDOWN_STUCK_RECOVERY_SECONDS = 120
 
 
 def setup_logging(foreground: bool) -> None:
@@ -43,6 +52,40 @@ def execute_shutdown(enabled: bool) -> tuple[bool, str]:
     except OSError as exc:
         LOGGER.exception("failed to schedule shutdown")
         return False, str(exc)
+
+
+def is_windows_shutting_down() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return bool(ctypes.windll.user32.GetSystemMetrics(SM_SHUTTINGDOWN))
+    except (AttributeError, OSError):
+        return False
+
+
+def has_recent_windows_shutdown_event() -> bool:
+    if sys.platform != "win32":
+        return False
+
+    query = f"*[System[(EventID=1074) and TimeCreated[timediff(@SystemTime) <= {SHUTDOWN_EVENT_LOOKBACK_MS}]]]"
+    try:
+        result = subprocess.run(
+            ["wevtutil", "qe", "System", "/c:1", "/rd:true", "/f:text", f"/q:{query}"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def detect_windows_shutdown(use_event_log: bool) -> bool:
+    if WINDOWS_SHUTDOWN_EVENT.is_set() or is_windows_shutting_down():
+        return True
+    return use_event_log and has_recent_windows_shutdown_event()
 
 
 def send_response(sock: socket.socket, source: tuple[str, int], config: dict[str, Any], request: dict[str, Any], code: str, status: str, message: str = "") -> None:
@@ -87,24 +130,43 @@ def send_status(sock: socket.socket, config: dict[str, Any], status: str, reason
         return
 
     notify_port = int(config.get("startup_notify_port") or config["port"])
+    plaintext = build_framed_response(status)
     packet = encrypt_packet(
         config["aes_key"],
-        build_framed_response(status),
+        plaintext,
         config.get("packet_format", "nonce_ciphertext_tag"),
     )
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     try:
         sock.sendto(packet, (str(notify_host), notify_port))
-        LOGGER.info("sent status=%s reason=%s to %s:%s", status, reason, notify_host, notify_port)
+        LOGGER.info("sent status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, notify_host, notify_port)
     except OSError:
-        LOGGER.exception("failed to send status=%s reason=%s to %s:%s", status, reason, notify_host, notify_port)
+        LOGGER.exception("failed to send status=%s reason=%s payload=%r to %s:%s", status, reason, plaintext, notify_host, notify_port)
 
 
-def send_online_status(sock: socket.socket, config: dict[str, Any], reason: str) -> None:
-    send_status(sock, config, "online", reason)
+def send_status_burst(sock: socket.socket, config: dict[str, Any], status: str, reason: str) -> None:
+    for attempt in range(SHUTDOWN_BURST_COUNT):
+        send_status(sock, config, status, reason)
+        if attempt < SHUTDOWN_BURST_COUNT - 1:
+            time.sleep(SHUTDOWN_BURST_INTERVAL_SECONDS)
 
 
-def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], config: dict[str, Any]) -> bool:
+def enter_shutdown_status_mode(sock: socket.socket, config: dict[str, Any], reason: str, now: float) -> float:
+    send_status_burst(sock, config, "shutdown_accepted", reason)
+    return now + SHUTDOWN_STATUS_INTERVAL_SECONDS
+
+
+def request_shutdown_status_mode() -> None:
+    WINDOWS_SHUTDOWN_EVENT.set()
+
+
+def notify_windows_shutdown(config_path: Path, reason: str = "windows_service_shutdown") -> None:
+    config = load_config(config_path)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        send_status_burst(sock, config, "shutdown_accepted", reason)
+
+
+def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], config: dict[str, Any], current_status: str = "online") -> bool:
     try:
         plaintext = decrypt_packet(config["aes_key"], data)
         request = parse_command(plaintext)
@@ -122,7 +184,10 @@ def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], con
         return False
 
     if code == command_codes["status"]:
-        send_response(sock, source, config, request, response_codes["online"], "online")
+        if current_status == "shutdown_accepted":
+            send_response(sock, source, config, request, response_codes["shutdown_accepted"], "shutdown_accepted")
+        else:
+            send_response(sock, source, config, request, response_codes["online"], "online")
         return False
 
     if code == command_codes["shutdown"]:
@@ -150,16 +215,47 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
         sock.bind(("0.0.0.0", port))
         sock.settimeout(1.0)
         send_startup_notification(sock, config)
-        status_interval = max(0, int(config.get("status_interval_seconds") or 0))
+        normal_status_interval = max(0, int(config.get("status_interval_seconds") or 0))
+        status_interval = normal_status_interval
         next_status_at = time.monotonic() + status_interval if status_interval else 0
-        shutting_down = False
+        current_status = "online"
+        shutdown_immediate_sent = False
+        shutdown_accepted_at: float | None = None
+        event_log_detection_at = time.monotonic() + SHUTDOWN_EVENT_ARM_DELAY_SECONDS
+
+        def enter_shutdown(reason: str, now: float) -> None:
+            nonlocal current_status, status_interval, next_status_at, shutdown_immediate_sent, shutdown_accepted_at
+            current_status = "shutdown_accepted"
+            status_interval = SHUTDOWN_STATUS_INTERVAL_SECONDS
+            shutdown_accepted_at = now
+            if not shutdown_immediate_sent:
+                next_status_at = enter_shutdown_status_mode(sock, config, reason, now)
+                shutdown_immediate_sent = True
+
+        def recover_if_shutdown_stuck(now: float) -> None:
+            nonlocal current_status, status_interval, next_status_at, shutdown_immediate_sent, shutdown_accepted_at
+            if (
+                current_status == "shutdown_accepted"
+                and shutdown_accepted_at is not None
+                and now - shutdown_accepted_at >= SHUTDOWN_STUCK_RECOVERY_SECONDS
+            ):
+                LOGGER.warning("shutdown appears to have been aborted; resetting shutdown tracking")
+                current_status = "online"
+                status_interval = normal_status_interval
+                next_status_at = now + normal_status_interval if normal_status_interval else 0
+                shutdown_immediate_sent = False
+                shutdown_accepted_at = None
+                WINDOWS_SHUTDOWN_EVENT.clear()
 
         while not STOP_EVENT.is_set():
-            if status_interval and time.monotonic() >= next_status_at:
-                if shutting_down:
-                    send_status(sock, config, "shutdown_accepted", "periodic_shutdown")
-                else:
-                    send_online_status(sock, config, "periodic")
+            now = time.monotonic()
+            recover_if_shutdown_stuck(now)
+            if current_status != "shutdown_accepted" and detect_windows_shutdown(now >= event_log_detection_at):
+                enter_shutdown("windows_shutdown_detected", now)
+
+            if status_interval and now >= next_status_at:
+                reason = "periodic_shutdown" if current_status == "shutdown_accepted" else "periodic"
+                send_status(sock, config, current_status, reason)
                 next_status_at = time.monotonic() + status_interval
 
             try:
@@ -173,8 +269,13 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
                 if STOP_EVENT.is_set():
                     break
                 raise
-            if handle_packet(sock, data, source, config):
-                shutting_down = True
+
+            now = time.monotonic()
+            if current_status != "shutdown_accepted" and detect_windows_shutdown(now >= event_log_detection_at):
+                enter_shutdown("windows_shutdown_detected", now)
+
+            if handle_packet(sock, data, source, config, current_status):
+                enter_shutdown("shutdown_command_accepted", time.monotonic())
 
     LOGGER.info("UDP listener stopped")
 

@@ -11,6 +11,7 @@ from typing import Any
 
 
 DEFAULT_CONFIG_FILE = "config.json"
+APP_VERSION = 2
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
 
@@ -135,7 +136,7 @@ def save_config(
         raise ConfigError("startup_notify_port must be in range 1..65535")
 
     data: dict[str, Any] = {
-        "version": 1,
+        "version": APP_VERSION,
         "port": port,
         "response_port": response_port,
         "packet_format": "nonce_ciphertext_tag",

@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from config_store import ConfigError, default_config_path, save_config, validate_port
+from config_store import APP_VERSION, ConfigError, default_config_path, save_config, validate_port
 
 
 FIXED_AES_KEY = "tCF2fFU8827lb23wEXzbZhB3IMHT09zM"
@@ -28,8 +28,7 @@ def parse_key(value: str) -> bytes:
 
 
 def parse_pc_port(value: str) -> int:
-    number = int(value.strip())
-    return validate_port(47000 + number if 1 <= number <= 99 else number)
+    return validate_port(int(value.strip()))
 
 
 def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes, str | None, int | None]:
@@ -58,6 +57,7 @@ def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes
 
 
 def interactive_args() -> tuple[int, bytes, str | None, int | None]:
+    print(f"프로그램 버전: {APP_VERSION}")
     port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호를 입력해주세요 : "))
     return port, parse_key(FIXED_AES_KEY), FIXED_NOTIFY_HOST, port
 
