@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import sys
 import urllib.error
@@ -58,8 +59,19 @@ def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes
 
 def interactive_args() -> tuple[int, bytes, str | None, int | None]:
     print(f"프로그램 버전: {APP_DISPLAY_VERSION}")
-    port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호를 입력해주세요 : "))
-    return port, parse_key(FIXED_AES_KEY), FIXED_NOTIFY_HOST, port
+    port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호(47001~47099)를 입력해주세요 : "))
+
+    manual_choice = input("브로드캐스트 주소를 직접 입력하시겠습니까?(Y/N) :  ").strip().upper()
+    if manual_choice == "Y":
+        notify_host = input("브로드캐스트 주소를 입력해주세요 : ").strip()
+        try:
+            ipaddress.ip_address(notify_host)
+        except ValueError as exc:
+            raise ConfigError(f"올바른 IP 주소 형식이 아닙니다: {notify_host}") from exc
+    else:
+        notify_host = FIXED_NOTIFY_HOST
+
+    return port, parse_key(FIXED_AES_KEY), notify_host, port
 
 
 def main() -> int:
