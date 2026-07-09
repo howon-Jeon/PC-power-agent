@@ -212,11 +212,15 @@ def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], con
         return False
 
     if code == command_codes["shutdown"]:
-        ok, message = execute_shutdown(bool(config.get("shutdown_enabled", False)))
+        shutdown_enabled = bool(config.get("shutdown_enabled", False))
+        ok, message = execute_shutdown(shutdown_enabled)
         if ok:
             send_response(sock, source, config, request, response_codes["shutdown_accepted"], "shutdown_accepted", message)
-            LOGGER.info("shutdown accepted; periodic status will report offline")
-            return True
+            if shutdown_enabled:
+                LOGGER.info("shutdown accepted; periodic status will report offline")
+                return True
+            LOGGER.info("shutdown dry-run accepted; status unchanged")
+            return False
         else:
             send_response(sock, source, config, request, response_codes["command_failed"], "failed", message)
         return False
@@ -299,7 +303,7 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
             if current_status != "shutdown_accepted" and detect_windows_shutdown(now >= event_log_detection_at):
                 enter_shutdown("windows_shutdown_detected", now)
 
-            if handle_packet(sock, data, source, config, current_status):
+            if handle_packet(sock, data, source, config, current_status) and current_status != "shutdown_accepted":
                 enter_shutdown("shutdown_command_accepted", time.monotonic())
 
     LOGGER.info("UDP listener stopped")
