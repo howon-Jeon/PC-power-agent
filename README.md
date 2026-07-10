@@ -52,9 +52,9 @@ install.bat
 
 4. Enter only the PC number or UDP port when prompted. Shutdown handling is enabled by the installer.
 
-The installer uses these fixed controller settings:
+The installer uses these controller settings:
 
-- AES key: `tCF2fFU8827lb23wEXzbZhB3IMHT09zM`
+- AES key: built into the application
 - Controller notify IP/broadcast: `255.255.255.255`
 - Controller notify UDP port: same as the entered PC UDP port
 
