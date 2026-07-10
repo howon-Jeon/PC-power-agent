@@ -10,14 +10,25 @@ set "INSTALLER_EXE=installer.exe"
 set "SERVICE_EXE=pc_agent_service.exe"
 set "PYTHON_INSTALLER=installer.py"
 set "PYTHON_SERVICE=pc_agent_service.py"
+set "INSTALL_DIR=%ProgramFiles%\PC Power Agent"
+set "INSTALLED_CONFIG=%INSTALL_DIR%\config.json"
+set "INSTALLED_SERVICE=%INSTALL_DIR%\pc_agent_service.exe"
 
-if not exist config.json (
+if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
+if errorlevel 1 goto failed
+
+if not exist "%INSTALLED_CONFIG%" if exist "config.json" (
+  copy /Y "config.json" "%INSTALLED_CONFIG%" >nul
+  if errorlevel 1 goto failed
+)
+
+if not exist "%INSTALLED_CONFIG%" (
   call :print_utf8 "7ISk7KCV7YyM7J287J20IOyXhuyKteuLiOuLpC4="
   echo.
   if exist "%INSTALLER_EXE%" (
-    "%INSTALLER_EXE%" --manual --enable-shutdown
+    "%INSTALLER_EXE%" --manual --enable-shutdown --config "%INSTALLED_CONFIG%"
   ) else (
-    python "%PYTHON_INSTALLER%" --manual --enable-shutdown
+    python "%PYTHON_INSTALLER%" --manual --enable-shutdown --config "%INSTALLED_CONFIG%"
   )
   if errorlevel 1 goto failed
 ) else (
@@ -25,7 +36,7 @@ if not exist config.json (
   echo.
 )
 
-for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content -Raw -Encoding UTF8 'config.json' | ConvertFrom-Json).port"`) do set "AGENT_PORT=%%p"
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Content -Raw -Encoding UTF8 '%INSTALLED_CONFIG%' | ConvertFrom-Json).port"`) do set "AGENT_PORT=%%p"
 
 if "%AGENT_PORT%"=="" (
   echo Failed to read UDP port from config.json.
@@ -37,22 +48,38 @@ netsh advfirewall firewall add rule name="%RULE_NAME%" dir=in action=allow proto
 if errorlevel 1 goto failed
 
 if exist "%SERVICE_EXE%" (
+  if exist "%INSTALLED_SERVICE%" (
+    "%INSTALLED_SERVICE%" stop >nul 2>&1
+    "%INSTALLED_SERVICE%" remove >nul 2>&1
+  )
   "%SERVICE_EXE%" stop >nul 2>&1
   "%SERVICE_EXE%" remove >nul 2>&1
-  "%SERVICE_EXE%" --startup auto install
+  timeout /t 2 /nobreak >nul
+  copy /Y "%SERVICE_EXE%" "%INSTALLED_SERVICE%" >nul
   if errorlevel 1 goto failed
-  "%SERVICE_EXE%" start
+  if exist "pc_agent.exe" copy /Y "pc_agent.exe" "%INSTALL_DIR%\pc_agent.exe" >nul
+  if exist "config.example.json" copy /Y "config.example.json" "%INSTALL_DIR%\config.example.json" >nul
+  "%INSTALLED_SERVICE%" --startup auto install
+  if errorlevel 1 goto failed
+  "%INSTALLED_SERVICE%" start
   if errorlevel 1 goto failed
 ) else (
   python "%PYTHON_SERVICE%" stop >nul 2>&1
   python "%PYTHON_SERVICE%" remove >nul 2>&1
-  python "%PYTHON_SERVICE%" --startup auto install
+  for %%f in (pc_agent_service.py pc_agent.py config_store.py crypto_codec.py network_broadcast.py protocol.py replay_guard.py) do (
+    copy /Y "%%f" "%INSTALL_DIR%\%%f" >nul
+    if errorlevel 1 goto failed
+  )
+  python "%INSTALL_DIR%\pc_agent_service.py" stop >nul 2>&1
+  python "%INSTALL_DIR%\pc_agent_service.py" remove >nul 2>&1
+  python "%INSTALL_DIR%\pc_agent_service.py" --startup auto install
   if errorlevel 1 goto failed
-  python "%PYTHON_SERVICE%" start
+  python "%INSTALL_DIR%\pc_agent_service.py" start
   if errorlevel 1 goto failed
 )
 
 echo Installed %SERVICE_NAME% on UDP port %AGENT_PORT%.
+echo Install folder: %INSTALL_DIR%
 echo.
 pause
 popd

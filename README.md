@@ -59,6 +59,8 @@ The installer uses these fixed controller settings:
 - Controller notify UDP port: same as the entered PC UDP port
 
 The installer registers `PcPowerAgent` as an automatic Windows service, so it starts again after reboot.
+The service files and configuration are copied to `%ProgramFiles%\PC Power Agent`.
+The original deployment folder can be moved or deleted after installation.
 
 5. From another PC on the same LAN, send a test command:
 
@@ -89,3 +91,14 @@ Default response codes:
 - `2002`: shutdown accepted
 - `4001`: unknown command
 - `5001`: command failed
+
+## Shutdown replay protection
+
+Accepted shutdown packet fingerprints are stored in
+`%ProgramFiles%\PC Power Agent\replay_cache.log`. An exact encrypted shutdown
+packet is executed only once, including across service or PC restarts.
+
+## Log retention
+
+The Windows service writes `pc_agent.log` in its installation folder. Each log
+file is limited to 5 MB, with up to three rotated backup files retained.

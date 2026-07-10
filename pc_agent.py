@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import logging
+from logging.handlers import RotatingFileHandler
 import socket
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from config_store import ConfigError, default_config_path, load_config
 from crypto_codec import PacketCryptoError, decrypt_packet, encrypt_packet
 from network_broadcast import resolve_broadcast_targets
 from protocol import build_framed_response, build_response, parse_command
+from replay_guard import PersistentReplayGuard, ReplayGuardError
 
 
 LOGGER = logging.getLogger("pc_agent")
@@ -29,6 +31,8 @@ SHUTDOWN_BURST_INTERVAL_SECONDS = 0.15
 SHUTDOWN_STUCK_RECOVERY_SECONDS = 120
 SHUTDOWN_PUSH_WINDOW_SECONDS = 12
 EVENT_LOG_POLL_INTERVAL_SECONDS = 5
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 
 _event_log_next_check_at = 0.0
 _event_log_last_result = False
@@ -38,7 +42,14 @@ def setup_logging(foreground: bool) -> None:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)] if foreground else []
     if not handlers:
         log_path = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent / "pc_agent.log"
-        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+        handlers.append(
+            RotatingFileHandler(
+                log_path,
+                maxBytes=LOG_MAX_BYTES,
+                backupCount=LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -187,7 +198,14 @@ def notify_windows_shutdown(config_path: Path, reason: str = "windows_service_sh
         send_status_burst(sock, config, "shutdown_accepted", reason)
 
 
-def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], config: dict[str, Any], current_status: str = "online") -> bool:
+def handle_packet(
+    sock: socket.socket,
+    data: bytes,
+    source: tuple[str, int],
+    config: dict[str, Any],
+    current_status: str = "online",
+    replay_guard: PersistentReplayGuard | None = None,
+) -> bool:
     try:
         plaintext = decrypt_packet(config["aes_key"], data)
         request = parse_command(plaintext)
@@ -213,6 +231,34 @@ def handle_packet(sock: socket.socket, data: bytes, source: tuple[str, int], con
 
     if code == command_codes["shutdown"]:
         shutdown_enabled = bool(config.get("shutdown_enabled", False))
+        if shutdown_enabled and replay_guard is not None:
+            try:
+                is_new_command = replay_guard.claim(data)
+            except ReplayGuardError as exc:
+                LOGGER.error("shutdown rejected because replay protection is unavailable: %s", exc)
+                send_response(
+                    sock,
+                    source,
+                    config,
+                    request,
+                    response_codes["command_failed"],
+                    "failed",
+                    "replay protection unavailable",
+                )
+                return False
+            if not is_new_command:
+                LOGGER.warning("ignored replayed shutdown command from %s:%s", source[0], source[1])
+                send_response(
+                    sock,
+                    source,
+                    config,
+                    request,
+                    response_codes["shutdown_accepted"],
+                    "shutdown_accepted",
+                    "duplicate command ignored",
+                )
+                return False
+
         ok, message = execute_shutdown(shutdown_enabled)
         if ok:
             send_response(sock, source, config, request, response_codes["shutdown_accepted"], "shutdown_accepted", message)
@@ -233,6 +279,7 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
     setup_logging(foreground)
     config = load_config(config_path)
     port = int(config["port"])
+    replay_guard = PersistentReplayGuard(config_path.with_name("replay_cache.log"))
 
     LOGGER.info("starting UDP listener on 0.0.0.0:%s", port)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -303,7 +350,10 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
             if current_status != "shutdown_accepted" and detect_windows_shutdown(now >= event_log_detection_at):
                 enter_shutdown("windows_shutdown_detected", now)
 
-            if handle_packet(sock, data, source, config, current_status) and current_status != "shutdown_accepted":
+            if (
+                handle_packet(sock, data, source, config, current_status, replay_guard)
+                and current_status != "shutdown_accepted"
+            ):
                 enter_shutdown("shutdown_command_accepted", time.monotonic())
 
     LOGGER.info("UDP listener stopped")
