@@ -52,9 +52,11 @@ install.bat
 
 4. Enter only the PC number or UDP port when prompted. Shutdown handling is enabled by the installer.
 
+Store the fixed AES key in the local `.env` file instead of source code. The build script copies `.env` into `dist`, so `installer.exe` can read `PC_POWER_AES_KEY` during installation. The `.env` file is ignored by Git.
+
 The installer uses these controller settings:
 
-- AES key: built into the application
+- AES key: loaded from `PC_POWER_AES_KEY`
 - Controller notify IP/broadcast: `255.255.255.255`
 - Controller notify UDP port: same as the entered PC UDP port
 

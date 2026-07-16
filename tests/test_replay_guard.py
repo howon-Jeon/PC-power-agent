@@ -41,7 +41,7 @@ class PersistentReplayGuardTests(unittest.TestCase):
     @mock.patch("pc_agent.execute_shutdown", return_value=(True, "shutdown scheduled"))
     def test_duplicate_shutdown_packet_is_not_executed_twice(self, execute_shutdown: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            key = b"tCF2fFU8827lb23wEXzbZhB3IMHT09zM"
+            key = b"0123456789abcdef0123456789abcdef"
             packet = encrypt_packet(key, b"#PC_POWER_OFF&")
             config = {
                 "aes_key": key,

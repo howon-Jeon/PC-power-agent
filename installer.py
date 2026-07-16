@@ -4,6 +4,7 @@ import argparse
 import base64
 import ipaddress
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -12,7 +13,7 @@ from pathlib import Path
 from config_store import APP_DISPLAY_VERSION, ConfigError, default_config_path, save_config, validate_port
 
 
-FIXED_AES_KEY = "tCF2fFU8827lb23wEXzbZhB3IMHT09zM"
+AES_KEY_ENV_NAME = "PC_POWER_AES_KEY"
 FIXED_NOTIFY_HOST = "255.255.255.255"
 
 
@@ -26,6 +27,39 @@ def parse_key(value: str) -> bytes:
         return base64.b64decode(cleaned, validate=True)
     except ValueError as exc:
         raise ConfigError("key must be 32-byte text, 64-byte hex, or base64") from exc
+
+
+def runtime_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def load_aes_key_from_env() -> bytes:
+    value = os.environ.get(AES_KEY_ENV_NAME)
+    if value:
+        return parse_key(value)
+
+    env_values = read_env_file(runtime_dir() / ".env")
+    value = env_values.get(AES_KEY_ENV_NAME)
+    if value:
+        return parse_key(value)
+
+    raise ConfigError(f"{AES_KEY_ENV_NAME} is not set. Create .env next to installer.exe or set the environment variable.")
 
 
 def parse_pc_port(value: str) -> int:
@@ -59,6 +93,7 @@ def fetch_install_config(server_url: str, install_code: str) -> tuple[int, bytes
 
 def interactive_args() -> tuple[int, bytes, str | None, int | None]:
     print(f"프로그램 버전: {APP_DISPLAY_VERSION}")
+    print("Copyright (c) 2026 DAWON DNS. All rights reserved.")
     port = parse_pc_port(input("앱 기능 설정과 동일하게 UDP 포트 번호(47001~47099)를 입력해주세요 : "))
 
     manual_choice = input("브로드캐스트 주소를 직접 입력하시겠습니까?(Y/N) :  ").strip().upper()
@@ -71,7 +106,7 @@ def interactive_args() -> tuple[int, bytes, str | None, int | None]:
     else:
         notify_host = FIXED_NOTIFY_HOST
 
-    return port, parse_key(FIXED_AES_KEY), notify_host, port
+    return port, load_aes_key_from_env(), notify_host, port
 
 
 def main() -> int:
@@ -101,7 +136,7 @@ def main() -> int:
             notify_port = validate_port(args.notify_port) if args.notify_port else notify_port
         elif args.manual and args.port:
             port = validate_port(args.port)
-            aes_key = parse_key(args.key_hex or args.key_base64 or FIXED_AES_KEY)
+            aes_key = parse_key(args.key_hex or args.key_base64) if (args.key_hex or args.key_base64) else load_aes_key_from_env()
             notify_host = args.notify_host or FIXED_NOTIFY_HOST
             notify_port = validate_port(args.notify_port) if args.notify_port else port
         elif args.manual:
