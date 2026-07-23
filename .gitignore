@@ -11,6 +11,7 @@ pc_agent.log
 *.log
 
 .env
+installer_build_secret.py
 .venv/
 venv/
 .claude/

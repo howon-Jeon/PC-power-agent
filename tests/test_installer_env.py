@@ -27,12 +27,22 @@ class InstallerEnvTests(unittest.TestCase):
                 with mock.patch("installer.runtime_dir", return_value=Path(temp_dir)):
                     self.assertEqual(installer.load_aes_key_from_env(), key.encode("utf-8"))
 
+    def test_loads_embedded_aes_key_when_env_is_missing(self) -> None:
+        key = "fedcba9876543210fedcba9876543210"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.dict("os.environ", {}, clear=True):
+                with mock.patch("installer.runtime_dir", return_value=Path(temp_dir)):
+                    with mock.patch("installer.load_embedded_aes_key", return_value=key):
+                        self.assertEqual(installer.load_aes_key_from_env(), key.encode("utf-8"))
+
     def test_missing_aes_key_fails_install(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             with mock.patch.dict("os.environ", {}, clear=True):
                 with mock.patch("installer.runtime_dir", return_value=Path(temp_dir)):
-                    with self.assertRaises(ConfigError):
-                        installer.load_aes_key_from_env()
+                    with mock.patch("installer.load_embedded_aes_key", return_value=None):
+                        with self.assertRaises(ConfigError):
+                            installer.load_aes_key_from_env()
 
 
 if __name__ == "__main__":

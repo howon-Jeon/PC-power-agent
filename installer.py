@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib
 import ipaddress
 import json
 import os
@@ -14,6 +15,7 @@ from config_store import APP_DISPLAY_VERSION, ConfigError, default_config_path, 
 
 
 AES_KEY_ENV_NAME = "PC_POWER_AES_KEY"
+BUILD_SECRET_MODULE = "installer_build_secret"
 FIXED_NOTIFY_HOST = "255.255.255.255"
 
 
@@ -49,6 +51,16 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def load_embedded_aes_key() -> str | None:
+    try:
+        module = importlib.import_module(BUILD_SECRET_MODULE)
+    except ImportError:
+        return None
+
+    value = getattr(module, "EMBEDDED_AES_KEY", "")
+    return str(value).strip() or None
+
+
 def load_aes_key_from_env() -> bytes:
     value = os.environ.get(AES_KEY_ENV_NAME)
     if value:
@@ -59,7 +71,11 @@ def load_aes_key_from_env() -> bytes:
     if value:
         return parse_key(value)
 
-    raise ConfigError(f"{AES_KEY_ENV_NAME} is not set. Create .env next to installer.exe or set the environment variable.")
+    value = load_embedded_aes_key()
+    if value:
+        return parse_key(value)
+
+    raise ConfigError(f"{AES_KEY_ENV_NAME} is not set and no embedded AES key is available.")
 
 
 def parse_pc_port(value: str) -> int:
