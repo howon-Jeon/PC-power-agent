@@ -28,8 +28,6 @@ SHUTDOWN_EVENT_LOOKBACK_MS = 15000
 SHUTDOWN_EVENT_ARM_DELAY_SECONDS = 20
 SHUTDOWN_BURST_COUNT = 1
 SHUTDOWN_BURST_INTERVAL_SECONDS = 0.15
-SHUTDOWN_STUCK_RECOVERY_SECONDS = 300
-SHUTDOWN_PUSH_WINDOW_SECONDS = 20
 EVENT_LOG_POLL_INTERVAL_SECONDS = 5
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
@@ -304,34 +302,14 @@ def run_agent(config_path: Path, foreground: bool = False) -> None:
                 next_status_at = enter_shutdown_status_mode(sock, config, reason, now)
                 shutdown_immediate_sent = True
 
-        def recover_if_shutdown_stuck(now: float) -> None:
-            nonlocal current_status, status_interval, next_status_at, shutdown_immediate_sent, shutdown_accepted_at
-            if (
-                current_status == "shutdown_accepted"
-                and shutdown_accepted_at is not None
-                and now - shutdown_accepted_at >= SHUTDOWN_STUCK_RECOVERY_SECONDS
-            ):
-                LOGGER.warning("shutdown appears to have been aborted; resetting shutdown tracking")
-                current_status = "online"
-                status_interval = normal_status_interval
-                next_status_at = now + normal_status_interval if normal_status_interval else 0
-                shutdown_immediate_sent = False
-                shutdown_accepted_at = None
-                WINDOWS_SHUTDOWN_EVENT.clear()
-
         while not STOP_EVENT.is_set():
             now = time.monotonic()
-            recover_if_shutdown_stuck(now)
             if current_status != "shutdown_accepted" and detect_windows_shutdown(now >= event_log_detection_at):
                 enter_shutdown("windows_shutdown_detected", now)
 
             if status_interval and now >= next_status_at:
-                within_push_window = (
-                    shutdown_accepted_at is None or now - shutdown_accepted_at <= SHUTDOWN_PUSH_WINDOW_SECONDS
-                )
-                if current_status != "shutdown_accepted" or within_push_window:
-                    reason = "periodic_shutdown" if current_status == "shutdown_accepted" else "periodic"
-                    send_status(sock, config, current_status, reason)
+                reason = "periodic_shutdown" if current_status == "shutdown_accepted" else "periodic"
+                send_status(sock, config, current_status, reason)
                 next_status_at = time.monotonic() + status_interval
 
             try:
